@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>终端监控 - 神经网络示波器</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        /* 重置与全局暗黑工业风格 */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            background-color: #f8f9fa;
+            color: #333333;
+            font-family: 'Consolas', 'Courier New', monospace;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        /* 顶部状态栏 */
+        .top-bar {
+            background-color: #ffffff;
+            border-bottom: 2px solid #e0e0e0;
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            text-transform: uppercase;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .sys-title {
+            color: #555555;
+            font-weight: bold;
+            letter-spacing: 2px;
+        }
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .led {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background-color: #ff3333;
+            box-shadow: 0 0 8px #ff3333;
+            transition: background-color 0.3s;
+        }
+        .led.online {
+            background-color: #00aa00;
+            box-shadow: 0 0 10px #00aa00;
+        }
+        /* 核心布局：左侧波形，右侧仪表盘 */
+        .main-container {
+            display: flex;
+            flex: 1;
+            padding: 15px;
+            gap: 15px;
+        }
+        /* 左侧示波器区域 */
+        .oscilloscope-panel {
+            flex: 3;
+            background-color: #ffffff;
+            border: 1px solid #d0d0d0;
+            position: relative;
+            border-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        /* 右侧遥测数据面板 */
+        .telemetry-panel {
+            flex: 1;
+            background-color: #ffffff;
+            border: 1px solid #d0d0d0;
+            border-radius: 4px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        /* 仪表盘数据块样式 */
+        .data-block {
+            background: #f8f9fa;
+            border-left: 4px solid #d0d0d0;
+            padding: 15px;
+            border-radius: 2px;
+        }
+        .data-block.ch1 { border-left-color: #1e90ff; }
+        .data-block.ch2 { border-left-color: #ff1493; }
+        .data-block.alert { border-left-color: #ff8c00; }
+        .data-label {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 5px;
+        }
+        .data-value {
+            font-size: 32px;
+            font-weight: bold;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        .data-value.ch1-text { color: #1e90ff; text-shadow: 0 0 4px rgba(30,144,255,0.2); }
+        .data-value.ch2-text { color: #ff1493; text-shadow: 0 0 4px rgba(255,20,147,0.2); }
+        .data-value.alert-text { color: #ff8c00; }
+
+        /* D3.js SVG 样式 */
+        svg { width: 100%; height: 100%; display: block; }
+        .grid line { stroke: #e8e8e8; stroke-width: 1px; }
+        .grid path { stroke-width: 0; }
+        .axis text { fill: #666; font-size: 10px; font-family: monospace; }
+        .axis path, .axis line { stroke: #cccccc; }
+
+        /* 波形线条样式（带辉光） */
+        .line-ch1 {
+            fill: none;
+            stroke: #1e90ff;
+            stroke-width: 2px;
+            filter: drop-shadow(0 0 2px rgba(30,144,255,0.3));
+        }
+        .line-ch2 {
+            fill: none;
+            stroke: #ff1493;
+            stroke-width: 2px;
+            stroke-dasharray: 4,4;
+            filter: drop-shadow(0 0 2px rgba(255,20,147,0.3));
+        }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <div class="sys-title">Neural Oscilloscope // SCADA Terminal</div>
+        <div class="status-indicator">
+            <span id="model-badge" style="color: #999;">MODEL: [WAITING]</span>
+            <span>|</span>
+            <span id="status-text" style="color: #dd0000;">SYS OFFLINE</span>
+            <div id="led-bulb" class="led"></div>
+        </div>
+    </div>
+    <div class="main-container">
+        <div class="oscilloscope-panel" id="chart-container"></div>
+        <div class="telemetry-panel">
+            <div class="data-block ch1">
+                <div class="data-label">CH1: 真实生理波形 (Raw EEG)</div>
+                <div class="data-value ch1-text" id="val-ch1">0.000</div>
+            </div>
+            <div class="data-block ch2">
+                <div class="data-label">CH2: 神经网络预测 (Predict)</div>
+                <div class="data-value ch2-text" id="val-ch2">0.000</div>
+            </div>
+            <div class="data-block alert">
+                <div class="data-label">△ 实时绝对误差（Loss）</div>
+                <div class="data-value alert-text" id="val-error">0.000</div>
+            </div>
+            <div class="data-block" style="border-left-color: #aaa;">
+                <div class="data-label">SYS 链路延迟（Latency）</div>
+                <div class="data-value" id="val-latency" style="color: #555; font-size: 24px;">0 ms</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 1. 初始化D3画布与自适应
+        const container = document.getElementById("chart-container");
+        const MAX_POINTS = 150;
+        let dataBuffer = [];
+
+        const width = container.clientWidth;
+        const height = container.clientHeight;
+        const margin = { top: 20, right: 20, bottom: 20, left: 40 };
+        const innerWidth = width - margin.left - margin.right;
+        const innerHeight = height - margin.top - margin.bottom;
+
+        const svg = d3.select("#chart-container")
+            .append("svg")
+            .attr("width", width)
+            .attr("height", height);
+
+        const g = svg.append("g")
+            .attr("transform", `translate(${margin.left},${margin.top})`);
+
+        // 比例尺
+        const xScale = d3.scaleLinear()
+            .domain([0, MAX_POINTS - 1])
+            .range([0, innerWidth]);
+        const yScale = d3.scaleLinear()
+            .domain([-2.5, 2.5])
+            .range([innerHeight, 0]);
+
+        // 绘制暗黑工业网格
+        g.append("g")
+            .attr("class", "grid")
+            .call(d3.axisLeft(yScale).ticks(10).tickSize(-innerWidth).tickFormat(""));
+        g.append("g")
+            .attr("class", "grid")
+            .attr("transform", `translate(0, ${innerHeight})`)
+            .call(d3.axisBottom(xScale).ticks(20).tickSize(-innerHeight).tickFormat(""));
+
+        // 坐标轴数值
+        g.append("g")
+            .attr("class", "axis")
+            .call(d3.axisLeft(yScale).ticks(5));
+
+        // 定义线条生成器
+        const lineCh1 = d3.line()
+            .x((d, i) => xScale(i))
+            .y(d => yScale(d.ch1_actual));
+        const lineCh2 = d3.line()
+            .x((d, i) => xScale(i))
+            .y(d => yScale(d.ch2_predict));
+
+        // 创建路径
+        const pathCh1 = g.append("path").attr("class", "line-ch1");
+        const pathCh2 = g.append("path").attr("class", "line-ch2");
+
+        // 2. DOM 元素绑定（用于仪表盘数据更新）
+        const domCh1 = document.getElementById("val-ch1");
+        const domCh2 = document.getElementById("val-ch2");
+        const domError = document.getElementById("val-error");
+        const domLatency = document.getElementById("val-latency");
+        const domModelBadge = document.getElementById("model-badge");
+        const domStatusText = document.getElementById("status-text");
+        const domLed = document.getElementById("led-bulb");
+
+        // 3. WebSocket 工业数据流接入
+        function connectDataStream() {
+            const ws = new WebSocket("ws://127.0.0.1:8765");
+
+            ws.onopen = () => {
+                domStatusText.textContent = "DATA LINK ACTIVE";
+                domStatusText.style.color = "#00aa00";
+                domLed.classList.add("online");
+            };
+
+            ws.onmessage = (event) => {
+                const payload = JSON.parse(event.data);
+
+                // 更新顶部系统信息
+                domModelBadge.textContent = `MODEL: [${payload.model_type}]`;
+
+                // 更新右侧数字遥测面板
+                domCh1.textContent = payload.ch1_actual.toFixed(3);
+                domCh2.textContent = payload.ch2_predict.toFixed(3);
+                domError.textContent = payload.error_abs.toFixed(3);
+                domLatency.textContent = payload.latency_ms.toFixed(1) + "ms";
+
+                // 将新数据推入波形缓冲区
+                dataBuffer.push(payload);
+                if (dataBuffer.length > MAX_POINTS) {
+                    dataBuffer.shift();
+                }
+
+                // 高帧率重绘波形
+                pathCh1.datum(dataBuffer).attr("d", lineCh1);
+                pathCh2.datum(dataBuffer).attr("d", lineCh2);
+            };
+
+            ws.onclose = () => {
+                domStatusText.textContent = "SYS OFFLINE";
+                domStatusText.style.color = "#dd0000";
+                domLed.classList.remove("online");
+                // 断线自动重连机制
+                setTimeout(connectDataStream, 3000);
+            };
+        }
+
+        // 启动连接
+        connectDataStream();
+    </script>
+</body>
+</html>

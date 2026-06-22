@@ -1,0 +1,10 @@
+{
+  "model_type": "LSTM",
+  "dataset": "北京PM2.5_2010-2014.csv",
+  "epochs": 12,
+  "sequence_length": 24,
+  "train_samples": 33381,
+  "test_samples": 8352,
+  "mae": 11.880632400512695,
+  "rmse": 20.935623168945312
+}
